@@ -9,16 +9,18 @@
 *  Please see LICENSE file for your rights under this license. */
 
 #include "FTL.h"
+#define SETUPVARSLINELENGTH 100000
 
-FILE *setupVarsfp;
 char ** setupVarsArray = NULL;
 
 void check_setupVarsconf(void)
 {
+	FILE *setupVarsfp;
 	if((setupVarsfp = fopen(files.setupVars, "r")) == NULL)
 	{
 		logg("WARN: Opening of setupVars.conf failed!");
 		logg("      Make sure it exists and is readable");
+		logg("      Message: %s", strerror(errno));
 	}
 	else
 	{
@@ -36,7 +38,7 @@ char* find_equals(const char* s)
 }
 
 // This will hold the read string
-// in memory and will serves the space
+// in memory and will serve the space
 // we will point to in the rest of the
 // process (e.g. setupVarsArray will
 // actually point to memory addresses
@@ -45,18 +47,19 @@ char * linebuffer = NULL;
 
 char * read_setupVarsconf(const char * key)
 {
+	FILE *setupVarsfp;
 	if((setupVarsfp = fopen(files.setupVars, "r")) == NULL)
 	{
-		logg("WARN: Reading setupVars.conf failed!");
+		logg("WARN: Reading setupVars.conf failed: %s", strerror(errno));
 		return NULL;
 	}
 
-	char * keystr = calloc(strlen(key)+2,sizeof(char));
-	linebuffer = calloc(1024,sizeof(char));
+	char * keystr = calloc(strlen(key)+2, sizeof(char));
+	linebuffer = calloc(SETUPVARSLINELENGTH, sizeof(char));
 
 	sprintf(keystr, "%s=", key);
 
-	while(fgets(linebuffer, 1024, setupVarsfp) != NULL)
+	while(fgets(linebuffer, SETUPVARSLINELENGTH, setupVarsfp) != NULL)
 	{
 		// Strip newline from fgets output
 		linebuffer[strlen(linebuffer) - 1] = '\0';

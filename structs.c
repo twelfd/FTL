@@ -11,6 +11,7 @@
 #include "FTL.h"
 
 FTLFileNamesStruct FTLfiles = {
+	"/etc/pihole/pihole-FTL.conf",
 	"/var/log/pihole-FTL.log",
 	"/var/run/pihole-FTL.pid",
 	"/var/run/pihole-FTL.port"
@@ -18,6 +19,7 @@ FTLFileNamesStruct FTLfiles = {
 
 logFileNamesStruct files = {
 	"/var/log/pihole.log",
+	"/var/log/pihole.log.1",
 	"/etc/pihole/list.preEventHorizon",
 	"/etc/pihole/whitelist.txt",
 	"/etc/pihole/blacklist.txt",
@@ -35,13 +37,12 @@ void memory_check(int which)
 			if(counters.queries >= counters.queries_MAX)
 			{
 				// Have to reallocate memory
-				logg_struct_resize("queries",counters.queries_MAX,counters.queries_MAX+QUERIESALLOCSTEP);
 				counters.queries_MAX += QUERIESALLOCSTEP;
-				queries = realloc(queries, counters.queries_MAX*sizeof(*queries));
+				logg_struct_resize("queries",counters.queries_MAX,QUERIESALLOCSTEP);
+				queries = realloc(queries, counters.queries_MAX*sizeof(queriesDataStruct));
 				if(queries == NULL)
 				{
 					logg("FATAL: Memory allocation failed! Exiting");
-					free(queries);
 					exit(EXIT_FAILURE);
 				}
 			}
@@ -50,13 +51,12 @@ void memory_check(int which)
 			if(counters.forwarded >= counters.forwarded_MAX)
 			{
 				// Have to reallocate memory
-				logg_struct_resize("forwarded",counters.forwarded_MAX,counters.forwarded_MAX+FORWARDEDALLOCSTEP);
 				counters.forwarded_MAX += FORWARDEDALLOCSTEP;
-				forwarded = realloc(forwarded, counters.forwarded_MAX*sizeof(*forwarded));
+				logg_struct_resize("forwarded",counters.forwarded_MAX,FORWARDEDALLOCSTEP);
+				forwarded = realloc(forwarded, counters.forwarded_MAX*sizeof(forwardedDataStruct));
 				if(forwarded == NULL)
 				{
 					logg("FATAL: Memory allocation failed! Exiting");
-					free(forwarded);
 					exit(EXIT_FAILURE);
 				}
 			}
@@ -65,13 +65,12 @@ void memory_check(int which)
 			if(counters.clients >= counters.clients_MAX)
 			{
 				// Have to reallocate memory
-				logg_struct_resize("clients",counters.clients_MAX,counters.clients_MAX+CLIENTSALLOCSTEP);
 				counters.clients_MAX += CLIENTSALLOCSTEP;
-				clients = realloc(clients, counters.clients_MAX*sizeof(*clients));
+				logg_struct_resize("clients",counters.clients_MAX,CLIENTSALLOCSTEP);
+				clients = realloc(clients, counters.clients_MAX*sizeof(clientsDataStruct));
 				if(clients == NULL)
 				{
 					logg("FATAL: Memory allocation failed! Exiting");
-					free(clients);
 					exit(EXIT_FAILURE);
 				}
 			}
@@ -80,13 +79,12 @@ void memory_check(int which)
 			if(counters.domains >= counters.domains_MAX)
 			{
 				// Have to reallocate memory
-				logg_struct_resize("domains",counters.domains_MAX,counters.domains_MAX+DOMAINSALLOCSTEP);
 				counters.domains_MAX += DOMAINSALLOCSTEP;
-				domains = realloc(domains, counters.domains_MAX*sizeof(*domains));
+				logg_struct_resize("domains",counters.domains_MAX,DOMAINSALLOCSTEP);
+				domains = realloc(domains, counters.domains_MAX*sizeof(domainsDataStruct));
 				if(domains == NULL)
 				{
 					logg("FATAL: Memory allocation failed! Exiting");
-					free(domains);
 					exit(EXIT_FAILURE);
 				}
 			}
@@ -95,15 +93,25 @@ void memory_check(int which)
 			if(counters.overTime >= counters.overTime_MAX)
 			{
 				// Have to reallocate memory
-				logg_struct_resize("overTime",counters.overTime_MAX,counters.overTime_MAX+OVERTIMEALLOCSTEP);
 				counters.overTime_MAX += OVERTIMEALLOCSTEP;
-				overTime = realloc(overTime, counters.overTime_MAX*sizeof(*overTime));
+				logg_struct_resize("overTime",counters.overTime_MAX,OVERTIMEALLOCSTEP);
+				overTime = realloc(overTime, counters.overTime_MAX*sizeof(overTimeDataStruct));
 				if(overTime == NULL)
 				{
 					logg("FATAL: Memory allocation failed! Exiting");
-					free(overTime);
 					exit(EXIT_FAILURE);
 				}
+			}
+		break;
+		case WILDCARD:
+			// Definitely enlarge wildcard entry
+			// Enlarge wildcarddomains pointer array
+			logg_struct_resize("wildcards", (counters.wildcarddomains+1), 1);
+			wildcarddomains = realloc(wildcarddomains, (counters.wildcarddomains+1)*sizeof(*wildcarddomains));
+			if(wildcarddomains == NULL)
+			{
+				logg("FATAL: Memory allocation failed! Exiting");
+				exit(EXIT_FAILURE);
 			}
 		break;
 		default:

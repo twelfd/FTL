@@ -11,91 +11,114 @@
 #include "FTL.h"
 #include "version.h"
 
+char * username;
+bool needGC = false;
+
 int main (int argc, char* argv[]) {
+	username = getUserName();
 
 	if(argc > 1)
 		parse_args(argc, argv);
 
-	open_FTL_log();
+	// Try to open FTL log
+	open_FTL_log(true);
 	open_pihole_log();
 	logg("########## FTL started! ##########");
-	logg_str("FTL branch: ",GIT_BRANCH);
-	logg_str("FTL hash: ",GIT_VERSION);
-	logg_str("FTL date: ",GIT_DATE);
+	logg("FTL branch: %s", GIT_BRANCH);
+	logg("FTL hash: %s", GIT_VERSION);
+	logg("FTL date: %s", GIT_DATE);
+	logg("FTL user: %s", username);
+
+	// pihole-FTL should really be run as user "pihole" to not mess up with the file permissions
+	// still allow this if "debug" flag is set
+	if(strcmp(username,"pihole") != 0 && !debug)
+	{
+		logg("Warning: Starting pihole-FTL directly is not recommended.");
+		logg("         Instead, use system commands for starting pihole-FTL as service (systemctl / service).");
+	}
+
+	read_FTLconf();
 
 	if(!debug)
 		go_daemon();
 	else
-		savepid(getpid());
+		savepid();
 
 	handle_signals();
 
-	init_socket();
-
 	read_gravity_files();
 
-	logg("Starting initial log file scan");
-	initialscan = true;
-	process_pihole_log();
-	initialscan = false;
-	logg("Finished initial log file scan:");
+	logg("Starting initial log file parsing");
+	initial_log_parsing();
+	logg("Finished initial log file parsing");
 	log_counter_info();
 	check_setupVarsconf();
 
-	bool clientconnected = false;
-	bool waiting = false;
+	// We will use the attributes object later to start all threads in detached mode
+	pthread_attr_t attr;
+	// Initialize thread attributes object with default attribute values
+	pthread_attr_init(&attr);
+	// When a detached thread terminates, its resources are automatically released back to
+	// the system without the need for another thread to join with the terminated thread
+	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
 
-	while(!killed)
+	pthread_t piholelogthread;
+	if(pthread_create( &piholelogthread, &attr, pihole_log_thread, NULL ) != 0)
 	{
-		// Daemon loop
-		int newdata = checkLogForChanges();
-		if(newdata != 0 && !waiting)
-		{
-			waiting = true;
-			timer_start();
-		}
+		logg("Unable to open Pi-hole log processing thread. Exiting...");
+		killed = 1;
+	}
 
-		check_socket();
+	// Initialize sockets only after initial log parsing
+	init_socket();
 
-		if (clientsocket > 0)
-		{
-			clientconnected = true;
-			read_socket();
-			sleepms(5);
-		}
-		else if(clientconnected)
-		{
-			clientconnected = false;
-			if(debug)
-				logg("Client disconnected");
-		}
-		else
-		{
-			listen_socket();
-		}
+	pthread_t listenthread;
+	if(pthread_create( &listenthread, &attr, listenting_thread, NULL ) != 0)
+	{
+		logg("Unable to open socket listening thread. Exiting...");
+		killed = 1;
+	}
 
-		// Read new data not earlier than 50 msec
-		// after they have been discovered
-		if(timer_elapsed_msec() > 50)
+	if(config.rolling_24h)
+	{
+		pthread_t GCthread;
+		if(pthread_create( &GCthread, &attr, GC_thread, NULL ) != 0)
 		{
-			waiting = false;
-			// Process new data
-			if(newdata > 0)
-			{
-				process_pihole_log();
-			}
-
-			// Process flushed log
-			if(newdata < 0)
-			{
-				pihole_log_flushed();
-			}
+			logg("Unable to start initial GC thread. Exiting...");
+			killed = 1;
 		}
 	}
 
+	while(!killed)
+	{
+		sleepms(100);
+
+		// Garbadge collect in regular interval, but don't do it if the threadlocks is set
+		if(config.rolling_24h && ((((time(NULL) - GCdelay)%GCinterval) == 0 && !(threadwritelock || threadreadlock)) || needGC))
+		{
+			needGC = false;
+			if(debug)
+				logg("Running GC on data structure");
+
+			pthread_t GCthread;
+			if(pthread_create( &GCthread, &attr, GC_thread, NULL ) != 0)
+			{
+				logg("Unable to open GC thread. Exiting...");
+				killed = 1;
+			}
+
+			while(((time(NULL) - GCdelay)%GCinterval) == 0)
+				sleepms(100);
+		}
+	}
+
+
 	logg("Shutting down...");
-	close_sockets();
+	pthread_cancel(piholelogthread);
+	pthread_cancel(listenthread);
+	close_socket();
+	removeport();
+	removepid();
 	logg("########## FTL terminated! ##########");
-	fclose(logfile);
-	return 0;
+	return 1;
 }

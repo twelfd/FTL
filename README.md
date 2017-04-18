@@ -34,33 +34,51 @@ If your device is not listed you can get your CPU architecture by running `lscpu
 
 ### How to test FTL?
 
-1. Download the suitable binary (look at the table above)
-2. Make FTL executable
-3. Rename the executable
-4. Install FTL
-5. Ensure proper permissions are set
-
-Steps 2-5:
-
-```
-chmod u+x pihole-FTL*
-mv pihole-FTL* pihole-FTL
-sudo install -m 0755 pihole-FTL /usr/bin
-sudo touch /var/log/pihole-FTL.log /var/run/pihole-FTL.pid /var/run/pihole-FTL.port
-sudo chmod 0666 /var/log/pihole-FTL.log /var/run/pihole-FTL.pid /var/run/pihole-FTL.port
-```
+`FTL` is now part of the Pi-hole `development` branches.
+If you want to test it, use `pihole checkout dev`
 
 ### How to compile FTL from source?
 
 1. Clone the repo
 2. `make`
 3. `sudo make install`
-4. start `pihole-FTL`
+4. `sudo service pihole-FTL start`
+
+### Debugging `pihole-FTL`
+
+#### Debugging instructions (when `FTL` is not starting reliably)
+
+Once you are used to it, you can skip most of the steps and debugging is actually quite easy and gives you insights into how software (not limited to `pihole-FTL`) works.
+
+1. Install `screen` and `gdb` (probably `sudo apt-get install screen gdb`)
+2. Start a screen session (it will allow you to come back even if the SSH connection died)
+  * If you don't know about `screen`, then read about it (you *will* love it!)
+3. Start a screen session using `screen`
+4. Ensure that `pihole-FTL` is terminated (e.g. `sudo killall pihole-FTL`)
+5. Arrange file permissions to be able to start `FTL` as your current user (the following assumes you are logged in as user `pi`).
+  * `sudo touch /var/log/pihole-FTL.log /run/pihole-FTL.pid /run/pihole-FTL.port`
+  * `sudo chown pi:pi /var/log/pihole-FTL.log /run/pihole-FTL.pid /run/pihole-FTL.port`
+  * `sudo chmod 0644 /var/log/pihole-FTL.log /run/pihole-FTL.pid /run/pihole-FTL.port`
+6. Start `pihole-FTL` in the debugger: `gdb pihole-FTL`
+7. Type `run debug` to start `FTL` (you should see some lines of text and `FTL` should start successfully).
+8. You can now close the terminal (Ctrl+A and then D to detach) and come back later using (`screen -r`) when it has crashed
+9. If it has crashed, copy&paste the terminal output, and
+10. type also `backtrace` and post the output in a (new) issue
+11. We might ask for additional information in order to isolate your particular issue
+
+#### Simplified debugging instructions (when `FTL` is running)
+
+`FTL` has been designed such that a debugger can be attached to an already running process to ease debugging. Use `sudo gdb -p $(cat /var/run/pihole-FTL.pid)` to attach to the already running `pihole-FTL` process. You can leave off `sudo` if you are running `pihole-FTL` with the current user. Once loading of the symbols has finished (the `(gdb)` input prompt is shown), run `continue` to continue operation of `pihole-FTL` inside the debugger. All debugger features are now available.
+
+If `pihole-FTL` has crashed, copy&paste the terminal output into a (new) issue. Also type `backtrace` and include its output. We might ask for additional information in order to isolate your particular issue.
+
+When you want to detach the debugger from `FTL` without terminating the process, you can hit `Ctrl+C` and enter `detach` followed by `quit`.
 
 ### Command line arguments
 
 - `debug` - Don't go into daemon mode (stay in foreground) + more verbose logging
 - `test` - Start `FTL` and process everything, but shut down immediately afterwards
+- `version` - Don't start `FTL`, show only version
 
 Command line arguments can be arbitrarily combined, e.g. `pihole-FTL debug test`
 
@@ -192,3 +210,23 @@ SRV: 0
 www.googleadservices.com
 ```
  Variant: `>recentBlocked (4)` show the four most recent vlocked domains
+
+- `>memory` : get information about `FTL`'s memory usage due to its internal data structure
+ ```
+memory allocated for internal data structure: 178688 bytes (178.69 KB)
+dynamically allocated allocated memory used for strings: 15084 bytes (15.08 KB)
+Sum: 193772 bytes (193.77 KB)
+```
+
+- `>clientID` : Get ID of currently connected client
+ ```
+6
+```
+
+- `>version` : Get version information of the currently running FTL instance
+ ```
+ version v1.6-3-g106498d-dirty
+tag v1.6
+branch master
+date 2017-03-26 13:10:43 +0200
+```

@@ -22,15 +22,15 @@ void read_gravity_files(void)
 
 	if(gravity < 0)
 	{
-		logg_str("Error: failed to read ", (char*)files.gravity);
+		logg("Error: failed to read %s", files.gravity);
 	}
-	logg_int("Gravity list entries: ",gravity);
+	logg("Gravity list entries: %i", gravity);
 
 	// Test if blacklist exists and has entries in it
 	if(blacklist > 0)
 	{
 		gravity += blacklist;
-		logg_int("Blacklist entries: ", blacklist);
+		logg("Blacklist entries: %i", blacklist);
 	}
 	else
 	{
@@ -43,7 +43,7 @@ void read_gravity_files(void)
 	readWildcardsList();
 	if(counters.wildcarddomains > 0)
 	{
-		logg_int("Wildcard blocking list entries: ", counters.wildcarddomains);
+		logg("Wildcard blocking list entries: %i", counters.wildcarddomains);
 	}
 	else
 	{
@@ -87,20 +87,20 @@ void readWildcardsList()
 	while(fgets(linebuffer, 511, fp))
 	{
 		buffer = calloc(512,sizeof(char));
-		int addrbuffer = 0;
-		bool known = false;
 		// Try to read up to 511 characters
 		if(sscanf(linebuffer, "address=/%511[^/]/%*[^\n]\n", buffer) > 0)
 		{
+			unsigned long int addrbuffer = 0;
 			// Skip leading '.' by incrementing memory location step by step until the first
 			// character is not a '.' anymore
 			while(*(buffer+addrbuffer) == '.' && addrbuffer < strlen(buffer)) addrbuffer++;
 			if(strlen(buffer+addrbuffer) == 0)
 			{
-				logg_str("WARNING: Invalid wildcard list entry found: ",buffer);
+				logg("WARNING: Invalid wildcard list entry found: %s", buffer);
 			}
 			else
 			{
+				bool known = false;
 				// Get pointer to string with stripped leading '.'
 				domain = buffer+addrbuffer;
 				for(i=0; i < counters.wildcarddomains; i++)
@@ -113,11 +113,13 @@ void readWildcardsList()
 					}
 				}
 				if(known) continue;
+
 				// Add wildcard entry
 				// Enlarge wildcarddomains pointer array
-				wildcarddomains = realloc(wildcarddomains, (counters.wildcarddomains+1)*sizeof(*wildcarddomains));
+				memory_check(WILDCARD);
 				// Allocate space for new domain entry and save domain
 				wildcarddomains[counters.wildcarddomains] = calloc(strlen(domain)+1,sizeof(char));
+				memory.wildcarddomains += (strlen(domain) + 1) * sizeof(char);
 				strcpy(wildcarddomains[counters.wildcarddomains], domain);
 
 				// Increase number of stored wildcards by one
