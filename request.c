@@ -12,8 +12,6 @@
 #include "version.h"
 
 // Private
-// int cmpdomains(const void *a, const void *b);
-int cmpdomains(int *elem1, int *elem2);
 #define min(a,b) ({ __typeof__ (a) _a = (a); __typeof__ (b) _b = (b); _a < _b ? _a : _b; })
 #define max(a,b) ({ __typeof__ (a) _a = (a); __typeof__ (b) _b = (b); _a > _b ? _a : _b; })
 
@@ -22,8 +20,7 @@ void getStats(int *sock);
 void getOverTime(int *sock);
 void getTopDomains (char *client_message, int *sock);
 void getTopClients(char *client_message, int *sock);
-void getForwardDestinations(int *sock);
-void getForwardNames(int *sock);
+void getForwardDestinations(char *client_message, int *sock);
 void getQueryTypes(int *sock);
 void getAllQueries(char *client_message, int *sock);
 void getRecentBlocked(char *client_message, int *sock);
@@ -32,6 +29,9 @@ void getForwardDestinationsOverTime(int *sock);
 void getClientID(int *sock);
 void getQueryTypesOverTime(int *sock);
 void getVersion(int *sock);
+void getDBstats(int *sock);
+void getClientsOverTime(int *sock);
+void getClientNames(int *sock);
 
 void process_request(char *client_message, int *sock)
 {
@@ -63,12 +63,12 @@ void process_request(char *client_message, int *sock)
 	else if(command(client_message, ">forward-dest"))
 	{
 		processed = true;
-		getForwardDestinations(sock);
+		getForwardDestinations(client_message, sock);
 	}
 	else if(command(client_message, ">forward-names"))
 	{
 		processed = true;
-		getForwardNames(sock);
+		getForwardDestinations(">forward-dest unsorted", sock);
 	}
 	else if(command(client_message, ">querytypes"))
 	{
@@ -110,12 +110,20 @@ void process_request(char *client_message, int *sock)
 		processed = true;
 		getVersion(sock);
 	}
-
-	// End of queryable commands
-	if(processed)
+	else if(command(client_message, ">dbstats"))
 	{
-		// Send EOM
-		seom(server_message, *sock);
+		processed = true;
+		getDBstats(sock);
+	}
+	else if(command(client_message, ">ClientsoverTime"))
+	{
+		processed = true;
+		getClientsOverTime(sock);
+	}
+	else if(command(client_message, ">client-names"))
+	{
+		processed = true;
+		getClientNames(sock);
 	}
 
 	// Test only at the end if we want to quit or kill
@@ -132,14 +140,23 @@ void process_request(char *client_message, int *sock)
 	else if(command(client_message, ">kill"))
 	{
 		processed = true;
+		sprintf(server_message,"killed\n");
+		swrite(server_message, *sock);
 		logg("FTL killed by client ID: %i",*sock);
 		killed = 1;
 	}
 
 	if(!processed)
 	{
-		sprintf(server_message,"unknown command: %s\n",client_message);
+		sprintf(server_message,"unknown command: %s",client_message);
 		swrite(server_message, *sock);
+	}
+
+	// End of queryable commands
+	if(*sock != 0)
+	{
+		// Send EOM
+		seom(server_message, *sock);
 	}
 }
 
@@ -185,8 +202,11 @@ bool command(char *client_message, const char* cmd)
 // }
 
 /* qsort comparision function (count field), sort ASC */
-int cmpdomains(int *elem1, int *elem2)
+int cmpasc(const void *a, const void *b)
 {
+	int *elem1 = (int*)a;
+	int *elem2 = (int*)b;
+
 	if (elem1[1] < elem2[1])
 		return -1;
 	else if (elem1[1] > elem2[1])
@@ -196,8 +216,11 @@ int cmpdomains(int *elem1, int *elem2)
 }
 
 // qsort subroutine, sort DESC
-int cmpforwards(int *elem1, int *elem2)
+int cmpdesc(const void *a, const void *b)
 {
+	int *elem1 = (int*)a;
+	int *elem2 = (int*)b;
+
 	if (elem1[1] > elem2[1])
 		return -1;
 	else if (elem1[1] < elem2[1])
@@ -218,12 +241,58 @@ void getStats(int *sock)
 	{
 		percentage = 1e2*blocked/total;
 	}
-	sprintf(server_message,"domains_being_blocked %i\ndns_queries_today %i\nads_blocked_today %i\nads_percentage_today %f\n", \
-	        counters.gravity,total,blocked,percentage);
+
+	switch(blockingstatus)
+	{
+		case 0: // Blocking disabled
+			sprintf(server_message,"domains_being_blocked N/A\n");
+			swrite(server_message, *sock);
+			break;
+		default: // Either unknown or enabled
+			sprintf(server_message,"domains_being_blocked %i\n",counters.gravity);
+			swrite(server_message, *sock);
+			break;
+	}
+	sprintf(server_message,"dns_queries_today %i\nads_blocked_today %i\nads_percentage_today %f\n", \
+	        total,blocked,percentage);
 	swrite(server_message, *sock);
 	sprintf(server_message,"unique_domains %i\nqueries_forwarded %i\nqueries_cached %i\n", \
 	        counters.domains,counters.forwardedqueries,counters.cached);
 	swrite(server_message, *sock);
+
+	// clients_ever_seen: all clients ever seen by FTL
+	sprintf(server_message,"clients_ever_seen %i\n", \
+	        counters.clients);
+	swrite(server_message, *sock);
+
+	// unique_clients: count only clients that have been active within the most recent 24 hours
+	int i, activeclients = 0;
+	for(i=0; i < counters.clients; i++)
+	{
+		validate_access("clients", i, true, __LINE__, __FUNCTION__, __FILE__);
+		if(clients[i].count > 0)
+			activeclients++;
+	}
+	sprintf(server_message,"unique_clients %i\n", \
+	        activeclients);
+	swrite(server_message, *sock);
+
+	switch(blockingstatus)
+	{
+		case 0: // Blocking disabled
+			sprintf(server_message,"status disabled\n");
+			swrite(server_message, *sock);
+			break;
+		case 1: // Blocking Enabled
+			sprintf(server_message,"status enabled\n");
+			swrite(server_message, *sock);
+			break;
+		default: // Unknown status
+			sprintf(server_message,"status unknown\n");
+			swrite(server_message, *sock);
+			break;
+	}
+
 	if(debugclients)
 		logg("Sent stats data to client, ID: %i", *sock);
 }
@@ -254,7 +323,7 @@ void getTopDomains(char *client_message, int *sock)
 {
 	char server_message[SOCKETBUFFERLEN];
 	int i, temparray[counters.domains][2], count=10, num;
-	bool blocked = command(client_message, ">top-ads");
+	bool blocked = command(client_message, ">top-ads"), audit = false, desc = false;
 
 	// Exit before processing any data if requested via config setting
 	if(!config.query_display)
@@ -265,6 +334,18 @@ void getTopDomains(char *client_message, int *sock)
 	{
 		// User wants a different number of requests
 		count = num;
+	}
+
+	// Apply Audit Log filtering?
+	if(command(client_message, " for audit"))
+	{
+		audit = true;
+	}
+
+	// Sort in descending order?
+	if(command(client_message, " desc"))
+	{
+		desc = true;
 	}
 
 	for(i=0; i < counters.domains; i++)
@@ -279,7 +360,11 @@ void getTopDomains(char *client_message, int *sock)
 	}
 
 	// Sort temporary array
-	qsort(temparray, counters.domains, sizeof(int[2]), (__compar_fn_t)cmpdomains);
+	if(desc)
+		qsort(temparray, counters.domains, sizeof(int[2]), cmpdesc);
+	else
+		qsort(temparray, counters.domains, sizeof(int[2]), cmpasc);
+
 
 	// Get filter
 	char * filter = read_setupVarsconf("API_QUERY_LOG_SHOW");
@@ -303,14 +388,17 @@ void getTopDomains(char *client_message, int *sock)
 	clearSetupVarsArray();
 
 	// Get domains which the user doesn't want to see
-	char * excludedomains = read_setupVarsconf("API_EXCLUDE_DOMAINS");
-	if(excludedomains != NULL)
+	char * excludedomains = NULL;
+	if(!audit)
 	{
-		getSetupVarsArray(excludedomains);
-		if(debugclients)
-			logg("Excluding %i domains from being displayed", setupVarsElements);
+		excludedomains = read_setupVarsconf("API_EXCLUDE_DOMAINS");
+		if(excludedomains != NULL)
+		{
+			getSetupVarsArray(excludedomains);
+			if(debugclients)
+				logg("Excluding %i domains from being displayed", setupVarsElements);
+		}
 	}
-
 
 	int skip = 0;
 	for(i=0; i < min(counters.domains, count+skip); i++)
@@ -329,9 +417,19 @@ void getTopDomains(char *client_message, int *sock)
 			}
 		}
 
+		// Skip this domain if already included in audit
+		if(audit && countlineswith(domains[j].domain, files.auditlist) > 0)
+		{
+			skip++;
+			continue;
+		}
+
 		if(blocked && showblocked && domains[j].blockedcount > 0)
 		{
-			sprintf(server_message,"%i %i %s\n",i,domains[j].blockedcount,domains[j].domain);
+			if(audit && domains[j].wildcard)
+				sprintf(server_message,"%i %i %s wildcard\n",i,domains[j].blockedcount,domains[j].domain);
+			else
+				sprintf(server_message,"%i %i %s\n",i,domains[j].blockedcount,domains[j].domain);
 			swrite(server_message, *sock);
 		}
 		else if(!blocked && showpermitted && (domains[j].count - domains[j].blockedcount) > 0)
@@ -362,6 +460,15 @@ void getTopClients(char *client_message, int *sock)
 		count = num;
 	}
 
+	// Show also clients which have not been active recently?
+	// This option can be combined with existing options,
+	// i.e. both >top-clients withzero" and ">top-clients withzero (123)" are valid
+	bool includezeroclients = false;
+	if(command(client_message, " withzero"))
+	{
+		includezeroclients = true;
+	}
+
 	for(i=0; i < counters.clients; i++)
 	{
 		validate_access("clients", i, true, __LINE__, __FUNCTION__, __FILE__);
@@ -370,9 +477,9 @@ void getTopClients(char *client_message, int *sock)
 	}
 
 	// Sort temporary array
-	qsort(temparray, counters.clients, sizeof(int[2]), (__compar_fn_t)cmpdomains);
+	qsort(temparray, counters.clients, sizeof(int[2]), cmpasc);
 
-	// Get domains which the user doesn't want to see
+	// Get clients which the user doesn't want to see
 	char * excludeclients = read_setupVarsconf("API_EXCLUDE_CLIENTS");
 	if(excludeclients != NULL)
 	{
@@ -398,8 +505,10 @@ void getTopClients(char *client_message, int *sock)
 				continue;
 			}
 		}
-
-		if(clients[j].count > 0)
+		// Return this client if either
+		// - "withzero" option is set, and/or
+		// - the client made at least one query within the most recent 24 hours
+		if(includezeroclients || clients[j].count > 0)
 		{
 			sprintf(server_message,"%i %i %s %s\n",i,clients[j].count,clients[j].ip,clients[j].name);
 			swrite(server_message, *sock);
@@ -412,32 +521,54 @@ void getTopClients(char *client_message, int *sock)
 }
 
 
-void getForwardDestinations(int *sock)
+void getForwardDestinations(char *client_message, int *sock)
 {
 	char server_message[SOCKETBUFFERLEN];
-	int i, temparray[counters.forwarded+1][2];
+	bool allocated = false, sort = true;
+	int i, temparray[counters.forwarded+1][2], forwardedsum = 0, totalqueries = 0;
+
+	if(command(client_message, "unsorted"))
+		sort = false;
+
 	for(i=0; i < counters.forwarded; i++)
 	{
 		validate_access("forwarded", i, true, __LINE__, __FUNCTION__, __FILE__);
-		temparray[i][0] = i;
-		temparray[i][1] = forwarded[i].count;
+		// Compute forwardedsum
+		forwardedsum += forwarded[i].count;
+
+		// If we want to print a sorted output, we fill the temporary array with
+		// the values we will use for sorting afterwards
+		if(sort)
+		{
+			temparray[i][0] = i;
+			temparray[i][1] = forwarded[i].count;
+		}
 	}
 
-	// Add "local " forward destination
-	temparray[counters.forwarded][0] = counters.forwarded;
-	temparray[counters.forwarded][1] = counters.cached + counters.blocked;
+	if(sort)
+	{
+		// Add "local " forward destination
+		temparray[counters.forwarded][0] = counters.forwarded;
+		temparray[counters.forwarded][1] = counters.cached + counters.blocked;
 
-	// Sort temporary array in descending order
-	qsort(temparray, counters.forwarded+1, sizeof(int[2]), (__compar_fn_t)cmpforwards);
+		// Sort temporary array in descending order
+		qsort(temparray, counters.forwarded+1, sizeof(int[2]), cmpdesc);
+	}
+
+	totalqueries = counters.forwardedqueries + counters.cached + counters.blocked;
 
 	// Loop over available forward destinations
 	for(i=0; i < min(counters.forwarded+1, 10); i++)
 	{
 		char *name, *ip;
-		int count;
+		double percentage;
 
 		// Get sorted indices
-		int j = temparray[i][0];
+		int j;
+		if(sort)
+			j = temparray[i][0];
+		else
+			j = i;
 
 		// Is this the "local" forward destination?
 		if(j == counters.forwarded)
@@ -446,25 +577,50 @@ void getForwardDestinations(int *sock)
 			strcpy(ip, "::1");
 			name = calloc(6,1);
 			strcpy(name, "local");
-			count = counters.cached + counters.blocked;
+			if(totalqueries > 0)
+				// Whats the percentage of (cached + blocked) queries on the total amount of queries?
+				percentage = 1e2 * (counters.cached + counters.blocked) / totalqueries;
+			else
+				percentage = 0.0;
+			allocated = true;
 		}
 		else
 		{
 			validate_access("forwarded", j, true, __LINE__, __FUNCTION__, __FILE__);
 			ip = forwarded[j].ip;
 			name = forwarded[j].name;
-			count = forwarded[j].count;
+			// Math explanation:
+			// A single query may result in requests being forwarded to multiple destinations
+			// Hence, in order to be able to give percentages here, we have to normalize the
+			// number of forwards to each specific destination by the total number of forward
+			// events. This term is done by
+			//   a = forwarded[j].count / forwardedsum
+			//
+			// The fraction a describes now how much share an individual forward destination
+			// has on the total sum of sent requests.
+			// We also know the share of forwarded queries on the total number of queries
+			//   b = counters.forwardedqueries / c
+			// where c is the number of valid queries,
+			//   c = counters.forwardedqueries + counters.cached + counters.blocked
+			//
+			// To get the total percentage of a specific query on the total number of queries,
+			// we simply have to scale b by a which is what we do in the following.
+			if(forwardedsum > 0 && totalqueries > 0)
+				percentage = 1e2 * forwarded[j].count / forwardedsum * counters.forwardedqueries / totalqueries;
+			else
+				percentage = 0.0;
+			allocated = false;
 		}
 
 		// Send data if count > 0
-		if(count > 0)
+		if(percentage > 0.0)
 		{
-			sprintf(server_message,"%i %i %s %s\n",i,count,ip,name);
+			sprintf(server_message,"%i %.2f %s %s\n",i,percentage,ip,name);
 			swrite(server_message, *sock);
 		}
 
 		// Free previously allocated memory only if we allocated it
-		if(i == counters.forwarded)
+		if(allocated)
 		{
 			free(ip);
 			free(name);
@@ -474,34 +630,20 @@ void getForwardDestinations(int *sock)
 		logg("Sent forward destination data to client, ID: %i", *sock);
 }
 
-
-void getForwardNames(int *sock)
-{
-	char server_message[SOCKETBUFFERLEN];
-	int i;
-
-	for(i=0; i < counters.forwarded; i++)
-	{
-		validate_access("forwarded", i, true, __LINE__, __FUNCTION__, __FILE__);
-		// Get sorted indices
-		sprintf(server_message,"%i %i %s %s\n",i,forwarded[i].count,forwarded[i].ip,forwarded[i].name);
-		swrite(server_message, *sock);
-	}
-
-	// Add "local" forward destination
-	sprintf(server_message,"%i %i ::1 local\n",counters.forwarded,counters.cached);
-	swrite(server_message, *sock);
-
-	if(debugclients)
-		logg("Sent forward destination names to client, ID: %i", *sock);
-}
-
-
 void getQueryTypes(int *sock)
 {
 	char server_message[SOCKETBUFFERLEN];
+	int total = counters.IPv4 + counters.IPv6;
+	double percentageIPv4 = 0.0, percentageIPv6 = 0.0;
 
-	sprintf(server_message,"A (IPv4): %i\nAAAA (IPv6): %i\n",counters.IPv4,counters.IPv6);
+	// Prevent floating point exceptions by checking if the divisor is != 0
+	if(total > 0)
+	{
+		percentageIPv4 = 1e2*counters.IPv4/total;
+		percentageIPv6 = 1e2*counters.IPv6/total;
+	}
+
+	sprintf(server_message,"A (IPv4): %.2f\nAAAA (IPv6): %.2f\n", percentageIPv4, percentageIPv6);
 	swrite(server_message, *sock);
 	if(debugclients)
 		logg("Sent query type data to client, ID: %i", *sock);
@@ -759,6 +901,7 @@ void getForwardDestinationsOverTime(int *sock)
 {
 	char server_message[SOCKETBUFFERLEN];
 	int i, sendit = -1;
+
 	for(i = 0; i < counters.overTime; i++)
 	{
 		validate_access("overTime", i, true, __LINE__, __FUNCTION__, __FILE__);
@@ -772,23 +915,74 @@ void getForwardDestinationsOverTime(int *sock)
 	{
 		for(i = sendit; i < counters.overTime; i++)
 		{
+			double percentage;
+
 			validate_access("overTime", i, true, __LINE__, __FUNCTION__, __FILE__);
 			sprintf(server_message, "%i", overTime[i].timestamp);
 
-			int j;
+			int j, forwardedsum = 0;
 
-			for(j = 0; j < counters.forwarded; j++)
+			// Compute forwardedsum used for later normalization
+			for(j = 0; j < overTime[i].forwardnum; j++)
 			{
-				int k;
-				if(j < overTime[i].forwardnum)
-					k = overTime[i].forwarddata[j];
-				else
-					k = 0;
-
-				sprintf(server_message + strlen(server_message), " %i", k);
+				forwardedsum += overTime[i].forwarddata[j];
 			}
 
-			sprintf(server_message + strlen(server_message), " %i\n", overTime[i].cached + overTime[i].blocked);
+			// Loop over forward destinations to generate output to be sent to the client
+			for(j = 0; j < counters.forwarded; j++)
+			{
+				int thisforward = 0;
+
+				if(j < overTime[i].forwardnum)
+				{
+					// This forward destination does already exist at this timestamp
+					// -> use counter of requests sent to this destination
+					thisforward = overTime[i].forwarddata[j];
+				}
+				// else
+				// {
+					// This forward destination does not yet exist at this timestamp
+					// -> use zero as number of requests sent to this destination
+				// 	thisforward = 0;
+				// }
+
+				// Avoid floating point exceptions
+				if(forwardedsum > 0 && overTime[i].total > 0 && thisforward > 0)
+				{
+					// A single query may result in requests being forwarded to multiple destinations
+					// Hence, in order to be able to give percentages here, we have to normalize the
+					// number of forwards to each specific destination by the total number of forward
+					// events. This is done by
+					//   a = thisforward / forwardedsum
+					// The fraction a describes how much share an individual forward destination
+					// has on the total sum of sent requests.
+					//
+					// We also know the share of forwarded queries on the total number of queries
+					//   b = forwardedqueries/overTime[i].total
+					// where the number of forwarded queries in this time interval is given by
+					//   forwardedqueries = overTime[i].total - (overTime[i].cached
+					//                                           + overTime[i].blocked)
+					//
+					// To get the total percentage of a specific forward destination on the total
+					// number of queries, we simply have to multiply a and b as done below:
+					percentage = 1e2 * thisforward / forwardedsum * (overTime[i].total - (overTime[i].cached + overTime[i].blocked)) / overTime[i].total;
+				}
+				else
+				{
+					percentage = 0.0;
+				}
+
+				sprintf(server_message + strlen(server_message), " %.2f", percentage);
+			}
+
+			// Avoid floating point exceptions
+			if(overTime[i].total > 0)
+				// Forward count for destination "local" is cached + blocked normalized by total:
+				percentage = 1e2 * (overTime[i].cached + overTime[i].blocked) / overTime[i].total;
+			else
+				percentage = 0.0;
+
+			sprintf(server_message + strlen(server_message), " %.2f\n", percentage);
 			swrite(server_message, *sock);
 		}
 	}
@@ -825,7 +1019,14 @@ void getQueryTypesOverTime(int *sock)
 		for(i = sendit; i < counters.overTime; i++)
 		{
 			validate_access("overTime", i, true, __LINE__, __FUNCTION__, __FILE__);
-			sprintf(server_message, "%i %i %i\n", overTime[i].timestamp,overTime[i].querytypedata[0],overTime[i].querytypedata[1]);
+			double percentageIPv4 = 0.0, percentageIPv6 = 0.0;
+			int sum = overTime[i].querytypedata[0] + overTime[i].querytypedata[1];
+			if(sum > 0)
+			{
+				percentageIPv4 = 1e2*overTime[i].querytypedata[0] / sum;
+				percentageIPv6 = 1e2*overTime[i].querytypedata[1] / sum;
+			}
+			sprintf(server_message, "%i %.2f %.2f\n", overTime[i].timestamp, percentageIPv4, percentageIPv6);
 			swrite(server_message, *sock);
 		}
 	}
@@ -836,9 +1037,149 @@ void getQueryTypesOverTime(int *sock)
 void getVersion(int *sock)
 {
 	char server_message[SOCKETBUFFERLEN];
-	sprintf(server_message,"version %s\ntag %s\nbranch %s\ndate %s\n", GIT_VERSION, GIT_TAG, GIT_BRANCH, GIT_DATE);
+
+	if(strcmp(GIT_BRANCH, "master") == 0)
+		sprintf(server_message,"version %s\ntag %s\nbranch %s\ndate %s\n", GIT_VERSION, GIT_TAG, GIT_BRANCH, GIT_DATE);
+	else
+		sprintf(server_message,"version vDev-%s\ntag %s\nbranch %s\ndate %s\n", GIT_HASH, GIT_TAG, GIT_BRANCH, GIT_DATE);
 	swrite(server_message, *sock);
 
 	if(debugclients)
 		logg("Sent version info to client, ID: %i", *sock);
+}
+
+void getDBstats(int *sock)
+{
+	// Get file details
+	struct stat st;
+	long int filesize = 0;
+	if(stat(FTLfiles.db, &st) != 0)
+		// stat() failed (maybe the file does not exist?)
+		filesize = -1;
+	else
+		filesize = st.st_size;
+
+	char *prefix = calloc(2, sizeof(char));
+	double formated = 0.0;
+	format_memory_size(prefix, filesize, &formated);
+
+	char server_message[SOCKETBUFFERLEN];
+	sprintf(server_message,"queries in database: %i\ndatabase filesize: %.2f %sB\nSQLite version: %s\n", get_number_of_queries_in_DB(), formated, prefix, sqlite3_libversion());
+	swrite(server_message, *sock);
+
+	if(debugclients)
+		logg("Sent DB info to client, ID: %i", *sock);
+}
+
+void getClientsOverTime(int *sock)
+{
+	char server_message[SOCKETBUFFERLEN];
+	int i, sendit = -1;
+
+	for(i = 0; i < counters.overTime; i++)
+	{
+		validate_access("overTime", i, true, __LINE__, __FUNCTION__, __FILE__);
+		if((overTime[i].total > 0 || overTime[i].blocked > 0))
+		{
+			sendit = i;
+			break;
+		}
+	}
+	if(sendit < 0)
+		return;
+
+	// Get clients which the user doesn't want to see
+	char * excludeclients = read_setupVarsconf("API_EXCLUDE_CLIENTS");
+	// Array of clients to be skipped in the output
+	// if skipclient[i] == true then this client should be hidden from
+	// returned data. We initialize it with false
+	bool skipclient[counters.clients];
+	memset(skipclient, false, counters.clients*sizeof(bool));
+
+	if(excludeclients != NULL)
+	{
+		getSetupVarsArray(excludeclients);
+
+		for(i=0; i < counters.clients; i++)
+		{
+			validate_access("clients", i, true, __LINE__, __FUNCTION__, __FILE__);
+			// Check if this client should be skipped
+			if(insetupVarsArray(clients[i].ip) || insetupVarsArray(clients[i].name))
+			{
+				skipclient[i] = true;
+			}
+		}
+	}
+
+	// Main return loop
+	for(i = sendit; i < counters.overTime; i++)
+	{
+		validate_access("overTime", i, true, __LINE__, __FUNCTION__, __FILE__);
+		sprintf(server_message, "%i", overTime[i].timestamp);
+
+		// Loop over forward destinations to generate output to be sent to the client
+		int j;
+		for(j = 0; j < counters.clients; j++)
+		{
+			int thisclient = 0;
+
+			if(skipclient[j])
+				continue;
+
+			if(j < overTime[i].clientnum)
+			{
+				// This client entry does already exist at this timestamp
+				// -> use counter of requests sent to this destination
+				thisclient = overTime[i].clientdata[j];
+			}
+
+			sprintf(server_message + strlen(server_message), " %i", thisclient);
+		}
+
+		sprintf(server_message + strlen(server_message), "\n");
+		swrite(server_message, *sock);
+	}
+
+	if(excludeclients != NULL)
+		clearSetupVarsArray();
+}
+
+void getClientNames(int *sock)
+{
+	char server_message[SOCKETBUFFERLEN];
+	int i;
+
+	// Get clients which the user doesn't want to see
+	char * excludeclients = read_setupVarsconf("API_EXCLUDE_CLIENTS");
+	// Array of clients to be skipped in the output
+	// if skipclient[i] == true then this client should be hidden from
+	// returned data. We initialize it with false
+	bool skipclient[counters.clients];
+	memset(skipclient, false, counters.clients*sizeof(bool));
+
+	if(excludeclients != NULL)
+	{
+		getSetupVarsArray(excludeclients);
+
+		for(i=0; i < counters.clients; i++)
+		{
+			validate_access("clients", i, true, __LINE__, __FUNCTION__, __FILE__);
+			// Check if this client should be skipped
+
+		}
+	}
+
+	// Loop over clients to generate output to be sent to the client
+	for(i = 0; i < counters.clients; i++)
+	{
+		validate_access("clients", i, true, __LINE__, __FUNCTION__, __FILE__);
+		if(insetupVarsArray(clients[i].ip) || insetupVarsArray(clients[i].name))
+			continue;
+
+		sprintf(server_message,"%i %i %s %s\n", i, clients[i].count, clients[i].ip, clients[i].name);
+		swrite(server_message, *sock);
+	}
+
+	if(excludeclients != NULL)
+		clearSetupVarsArray();
 }

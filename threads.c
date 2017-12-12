@@ -13,43 +13,37 @@
 // Logic of the locks:
 // Any of the various threads (logparser, GC, client threads) is accessing FTL's data structure. Hence, they should
 // never run at the same time since the data can change half-way through, leading to unspecified behavior.
-// threadwritelock:  The threadwritelock ensures that only one thread with write-access to FTL's data structure can
-//                   be active at any given time
-// threadreadlock:   An expection to the rule of non-concurrency are the client threads, as they do need read-access
-//                   Therefore, it is no problem to have several of them running concurrently. Accordingly, client
-//                   threads do *not* have to wait at the lock if threadreadlocks is true (i.e. a client listener
-//                   thread has activated this thread lock earlier)
-bool threadwritelock = false;
-bool threadreadlock = false;
+// threadlock:  The threadlock ensures that only one thread can be active at any given time
+pthread_mutex_t threadlock;
 
-void enable_read_lock(const char *message)
+void enable_thread_lock(const char *message)
 {
-	while(threadwritelock) sleepms(5);
+	int ret = pthread_mutex_lock(&threadlock);
+
+	if(ret != 0)
+		logg("Thread lock error: %i",ret);
 
 	if(debugthreads)
-		logg("Thread lock enabled (R ): %s", message);
-
-	// Set threadwritelock
-	threadwritelock = false;
-	// Set threadreadlock (see above)
-	threadreadlock = true;
+		logg("Thread locked: %s", message);
 }
 
-void enable_read_write_lock(const char *message)
+void disable_thread_lock(const char *message)
 {
-	while(threadwritelock || threadreadlock) sleepms(5);
+	int ret = pthread_mutex_unlock(&threadlock);
+
+	if(ret != 0)
+		logg("Thread unlock error: %i",ret);
 
 	if(debugthreads)
-		logg("Thread lock enabled (RW): %s", message);
-
-	// Set threadwritelock
-	threadwritelock = true;
+		logg("Thread unlocked: %s", message);
 }
 
-void disable_thread_locks(const char *message)
+void init_thread_lock(void)
 {
-	threadwritelock = false;
-	threadreadlock = false;
-	if(debugthreads)
-		logg("Thread lock disabled: %s", message);
+	if (pthread_mutex_init(&threadlock, NULL) != 0)
+	{
+		logg("FATAL: Thread mutex init failed\n");
+		// Return failure
+		exit(EXIT_FAILURE);
+	}
 }

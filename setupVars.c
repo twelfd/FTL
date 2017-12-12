@@ -9,7 +9,6 @@
 *  Please see LICENSE file for your rights under this license. */
 
 #include "FTL.h"
-#define SETUPVARSLINELENGTH 100000
 
 char ** setupVarsArray = NULL;
 
@@ -44,6 +43,7 @@ char* find_equals(const char* s)
 // actually point to memory addresses
 // which we allocate for this buffer.
 char * linebuffer = NULL;
+size_t linebuffersize = 0;
 
 char * read_setupVarsconf(const char * key)
 {
@@ -54,15 +54,21 @@ char * read_setupVarsconf(const char * key)
 		return NULL;
 	}
 
+	// Allocate keystr
 	char * keystr = calloc(strlen(key)+2, sizeof(char));
-	linebuffer = calloc(SETUPVARSLINELENGTH, sizeof(char));
-
+	if(keystr == NULL)
+	{
+		logg("WARN: read_setupVarsconf failed: could not allocate memory for keystr");
+		fclose(setupVarsfp);
+		return NULL;
+	}
 	sprintf(keystr, "%s=", key);
 
-	while(fgets(linebuffer, SETUPVARSLINELENGTH, setupVarsfp) != NULL)
+	errno = 0;
+	while(getline(&linebuffer, &linebuffersize, setupVarsfp) != -1)
 	{
-		// Strip newline from fgets output
-		linebuffer[strlen(linebuffer) - 1] = '\0';
+		// Strip (possible) newline
+		linebuffer[strcspn(linebuffer, "\n")] = '\0';
 
 		// Skip comment lines
 		if(linebuffer[0] == '#' || linebuffer[0] == ';')
@@ -78,9 +84,23 @@ char * read_setupVarsconf(const char * key)
 		return (find_equals(linebuffer) + 1);
 	}
 
+	if(errno == ENOMEM)
+		logg("WARN: read_setupVarsconf failed: could not allocate memory for getline");
+
 	// Key not found -> return NULL
 	fclose(setupVarsfp);
+
+	// Freeing keystr, not setting to NULL, since not used outside of this routine
 	free(keystr);
+
+	// Freeing and setting to NULL to prevent a dangling pointer
+	if(linebuffer != NULL)
+	{
+		free(linebuffer);
+		linebuffersize = 0;
+		linebuffer = NULL;
+	}
+
 	return NULL;
 }
 
@@ -111,12 +131,20 @@ void getSetupVarsArray(char * input)
 void clearSetupVarsArray(void)
 {
 	setupVarsElements = 0;
-	free(setupVarsArray);
-	free(linebuffer);
 	// setting unused pointers to NULL
 	// protecting against dangling pointer bugs
-	setupVarsArray = NULL;
-	linebuffer = NULL;
+	// free only if not already NULL
+	if(setupVarsArray != NULL)
+	{
+		free(setupVarsArray);
+		setupVarsArray = NULL;
+	}
+	if(linebuffer != NULL)
+	{
+		free(linebuffer);
+		linebuffersize = 0;
+		linebuffer = NULL;
+	}
 }
 
 /* Example
@@ -138,12 +166,19 @@ bool insetupVarsArray(char * str)
 		if(setupVarsArray[i][0] == '*')
 		{
 			// Copying strlen-1 chars into buffer of size strlen: OK
-			char * domain = calloc(strlen(setupVarsArray[i]),sizeof(char));
-			strncpy(domain,setupVarsArray[i]+1,strlen(setupVarsArray[i])-1);
+			size_t lenght = strlen(setupVarsArray[i]);
+			char * domain = calloc(lenght, sizeof(char));
+			// strncat() NULL-terminates the copied string (strncpy() doesn't!)
+			strncat(domain, setupVarsArray[i]+1, lenght-1);
+
 			if(strstr(str, domain) != NULL)
 			{
 				free(domain);
 				return true;
+			}
+			else
+			{
+				free(domain);
 			}
 		}
 		else

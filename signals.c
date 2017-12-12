@@ -11,6 +11,8 @@
 #include "FTL.h"
 
 volatile sig_atomic_t killed = 0;
+int FTLstarttime = 0;
+bool rereadgravity = false;
 
 static void SIGTERM_handler(int sig, siginfo_t *si, void *unused)
 {
@@ -30,31 +32,36 @@ static void SIGSEGV_handler(int sig, siginfo_t *si, void *unused)
 	logg("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
 	logg("---------------------------->  FTL crashed!  <----------------------------");
 	logg("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
-	logg("> Please report a bug at https://github.com/pi-hole/FTL/issues");
-	logg("> and include in your report already the following details:");
-	logg(">");
-	logg("> Received signal: %s", strsignal(sig));
-	logg("       at address: %lu", (unsigned long) si->si_addr);
+	logg("Please report a bug at https://github.com/pi-hole/FTL/issues");
+	logg("and include in your report already the following details:\n");
+
+	if(FTLstarttime != 0)
+	{
+		logg("FTL has been running for %i seconds", time(NULL)-FTLstarttime);
+	}
+	log_FTL_version();
+
+	logg("\nReceived signal: %s", strsignal(sig));
+	logg("     at address: %lu", (unsigned long) si->si_addr);
 	switch (si->si_code)
 	{
-		case SEGV_MAPERR: logg("        with code: SEGV_MAPERR (Address not mapped to object)"); break;
-		case SEGV_ACCERR: logg("        with code: SEGV_ACCERR (Invalid permissions for mapped object)"); break;
+		case SEGV_MAPERR: logg("      with code: SEGV_MAPERR (Address not mapped to object)"); break;
+		case SEGV_ACCERR: logg("      with code: SEGV_ACCERR (Invalid permissions for mapped object)"); break;
 #if defined(SEGV_BNDERR)
-		case SEGV_BNDERR: logg("        with code: SEGV_BNDERR (Failed address bound checks)"); break;
+		case SEGV_BNDERR: logg("      with code: SEGV_BNDERR (Failed address bound checks)"); break;
 #endif
-		default: logg("        with code: Unknown (%i), ",si->si_code); break;
+		default: logg("      with code: Unknown (%i), ",si->si_code); break;
 	}
 
 	// Print memory usage
 	unsigned long int structbytes = sizeof(countersStruct) + sizeof(ConfigStruct) + counters.queries_MAX*sizeof(queriesDataStruct) + counters.forwarded_MAX*sizeof(forwardedDataStruct) + counters.clients_MAX*sizeof(clientsDataStruct) + counters.domains_MAX*sizeof(domainsDataStruct) + counters.overTime_MAX*sizeof(overTimeDataStruct) + (counters.wildcarddomains)*sizeof(*wildcarddomains);
 	unsigned long int dynamicbytes = memory.wildcarddomains + memory.domainnames + memory.clientips + memory.clientnames + memory.forwardedips + memory.forwardednames + memory.forwarddata + memory.querytypedata;
-	logg("> Memory usage (structs): %lu", structbytes);
-	logg("> Memory usage (dynamic): %lu", dynamicbytes);
-	logg(">");
+	logg("Memory usage (structs): %lu", structbytes);
+	logg("Memory usage (dynamic): %lu\n", dynamicbytes);
 
 	// Getting backtrace symbols is meaningless here since if we would now start a backtrace
 	// then the addresses would only point to this signal handler
-	logg("> Thank you for helping us to improve our FTL engine!");
+	logg("Thank you for helping us to improve our FTL engine!");
 
 	// Print message and abort
 	logg("FTL terminated!");
@@ -63,8 +70,14 @@ static void SIGSEGV_handler(int sig, siginfo_t *si, void *unused)
 
 static void SIGUSR1_handler(int signum)
 {
-	logg("NOTICE: Received signal SIGUSR1");
+	logg("NOTICE: Received signal SIGUSR1 - re-parsing log files");
 	flush = true;
+}
+
+static void SIGHUP_handler(int signum)
+{
+	logg("NOTICE: Received signal SIGHUP - re-reading gravity files");
+	rereadgravity = true;
 }
 
 void handle_signals(void)
@@ -119,4 +132,18 @@ void handle_signals(void)
 		USR1action.sa_handler = &SIGUSR1_handler;
 		sigaction(SIGUSR1, &USR1action, NULL);
 	}
+
+	// Catch SIGHUP
+	sigaction (SIGHUP, NULL, &old_action);
+	if(old_action.sa_handler != SIG_IGN)
+	{
+		struct sigaction HUPaction;
+		memset(&HUPaction, 0, sizeof(struct sigaction));
+		sigemptyset(&HUPaction.sa_mask);
+		HUPaction.sa_handler = &SIGHUP_handler;
+		sigaction(SIGHUP, &HUPaction, NULL);
+	}
+
+	// Log start time of FTL
+	FTLstarttime = time(NULL);
 }

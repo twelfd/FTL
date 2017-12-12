@@ -8,6 +8,8 @@
 *  This file is copyright under the latest version of the EUPL.
 *  Please see LICENSE file for your rights under this license. */
 
+#define __USE_XOPEN
+#define _GNU_SOURCE
 #include <stdio.h>
 // variable argument lists
 #include <stdarg.h>
@@ -18,8 +20,6 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <string.h>
-#define __USE_XOPEN
-#define _GNU_SOURCE
 #include <time.h>
 #include <sys/time.h>
 #include <sys/socket.h>
@@ -36,6 +36,10 @@
 #include <pwd.h>
 // syslog
 #include <syslog.h>
+// SQLite
+#include "sqlite3.h"
+// tolower()
+#include <ctype.h>
 
 #include "routines.h"
 
@@ -62,12 +66,17 @@
 // Default -60 (one minute before a full hour)
 #define GCdelay (-60)
 
+// How often do we dump into FTL's database?
+// Default: 60 (once per minute)
+#define DBinterval 60
+
 // Static structs
 typedef struct {
 	const char* conf;
 	const char* log;
 	const char* pid;
 	const char* port;
+	const char* db;
 } FTLFileNamesStruct;
 
 typedef struct {
@@ -78,6 +87,8 @@ typedef struct {
 	const char* blacklist;
 	const char* setupVars;
 	const char* wildcards;
+	const char* auditlist;
+	const char* dnsmasqconfig;
 } logFileNamesStruct;
 
 typedef struct {
@@ -110,6 +121,10 @@ typedef struct {
 	bool include_yesterday;
 	bool rolling_24h;
 	bool query_display;
+	bool analyze_AAAA;
+	int maxDBdays;
+	bool resolveIPv6;
+	bool resolveIPv4;
 } ConfigStruct;
 
 // Dynamic structs
@@ -124,6 +139,7 @@ typedef struct {
 	int clientID;
 	int forwardID;
 	bool valid;
+	bool db;
 } queriesDataStruct;
 
 typedef struct {
@@ -157,6 +173,8 @@ typedef struct {
 	int forwardnum;
 	int *forwarddata;
 	int *querytypedata;
+	int clientnum;
+	int *clientdata;
 } overTimeDataStruct;
 
 typedef struct {
@@ -167,10 +185,12 @@ typedef struct {
 	int forwardedips;
 	int forwardednames;
 	int forwarddata;
+	int clientdata;
 	int querytypedata;
 } memoryStruct;
 
 enum { QUERIES, FORWARDED, CLIENTS, DOMAINS, OVERTIME, WILDCARD };
+enum { SOCKET };
 
 logFileNamesStruct files;
 FTLFileNamesStruct FTLfiles;
@@ -194,8 +214,10 @@ bool debug;
 bool debugthreads;
 bool debugclients;
 bool debugGC;
+bool debugDB;
 bool threadwritelock;
 bool threadreadlock;
+unsigned char blockingstatus;
 
 char ** wildcarddomains;
 
@@ -206,4 +228,9 @@ char * username;
 char timestamp[16];
 bool flush;
 bool needGC;
-
+bool daemonmode;
+bool database;
+long int lastdbindex;
+bool travis;
+bool DBdeleteoldqueries;
+bool rereadgravity;

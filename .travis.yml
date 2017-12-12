@@ -11,6 +11,10 @@ matrix:
   - env:
     - BUILD_CC="cc"
     - BIN_NAME="pihole-FTL-linux-x86_64"
+    addons:
+      apt:
+        packages:
+        - sqlite3
   - env:
     - BUILD_CC="arm-linux-gnueabihf-gcc"
     - BIN_NAME="pihole-FTL-arm-linux-gnueabihf"
@@ -39,6 +43,15 @@ matrix:
         - binutils-aarch64-linux-gnu
         - libc6-dev-arm64-cross
   - env:
+    - BUILD_CC="powerpc-linux-gnu-gcc"
+    - BIN_NAME="pihole-FTL-powerpc-linux-gnu"
+    addons:
+      apt:
+        packages:
+        - gcc-powerpc-linux-gnu
+        - binutils-powerpc-linux-gnu
+        - libc6-dev-powerpc-cross
+  - env:
     - BUILD_CC="cc"
     - CFLAGS="-m32"
     - BIN_NAME="pihole-FTL-linux-x86_32"
@@ -46,15 +59,28 @@ matrix:
       apt:
         packages:
         - gcc-multilib
+  - env:
+    - BUILD_CC="musl-gcc"
+    - BIN_NAME="pihole-FTL-musl-linux-x86_64"
+    addons:
+      apt:
+        packages:
+        - musl-tools
 before_script:
 - mkdir -p "${DEST_DIR}"
 - make clean
 script:
 - make pihole-FTL CC="${BUILD_CC}" CFLAGS="${CFLAGS}"
 - file pihole-FTL
+- if [[ "${BIN_NAME}" == "pihole-FTL-linux-x86_64" ]]; then test/run.sh; fi
 - mv pihole-FTL "${DEST_DIR}/${BIN_NAME}"
 - cd "${DEST_DIR}"
 - sha1sum pihole-FTL-* > ${BIN_NAME}.sha1
+- wget https://ftl.pi-hole.net:8080/FTL-client
+- chmod +x ./FTL-client
+- 'if [ "$TRAVIS_PULL_REQUEST" = "false" ]; then ./FTL-client "${TRAVIS_BRANCH}" "${BIN_NAME}" "${travissecret}"; fi'
+- 'if [ "$TRAVIS_PULL_REQUEST" = "false" ]; then ./FTL-client "${TRAVIS_BRANCH}" "${BIN_NAME}.sha1" "${travissecret}"; fi'
+- rm ./FTL-client
 - ls -lah "${DEST_DIR}"
 deploy:
   skip_cleanup: true

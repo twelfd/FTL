@@ -9,6 +9,9 @@
 *  Please see LICENSE file for your rights under this license. */
 
 #include "FTL.h"
+#include "version.h"
+
+pthread_mutex_t lock;
 
 void close_FTL_log(void)
 {
@@ -29,7 +32,15 @@ void open_FTL_log(bool test)
 	}
 
 	if(test)
+	{
+		if (pthread_mutex_init(&lock, NULL) != 0)
+		{
+			printf("FATAL: Log mutex init failed\n");
+			// Return failure
+			exit(EXIT_FAILURE);
+		}
 		close_FTL_log();
+	}
 }
 
 void get_timestr(char *timestring)
@@ -47,6 +58,8 @@ void logg(const char *format, ...)
 {
 	char timestring[32] = "";
 	va_list args;
+
+	pthread_mutex_lock(&lock);
 
 	get_timestr(timestring);
 
@@ -80,6 +93,8 @@ void logg(const char *format, ...)
 
 	// Close log file
 	close_FTL_log();
+
+	pthread_mutex_unlock(&lock);
 }
 
 void format_memory_size(char *prefix, unsigned long int bytes, double *formated)
@@ -124,4 +139,12 @@ void log_counter_info(void)
 	logg(" -> Unknown DNS queries: %i", counters.unknown);
 	logg(" -> Unique domains: %i", counters.domains);
 	logg(" -> Unique clients: %i", counters.clients);
+}
+
+void log_FTL_version(void)
+{
+	logg("FTL branch: %s", GIT_BRANCH);
+	logg("FTL hash: %s", GIT_VERSION);
+	logg("FTL date: %s", GIT_DATE);
+	logg("FTL user: %s", username);
 }
